@@ -6,14 +6,62 @@ Gemini APIを使用してAIツールデータを自動更新します。
 import os
 import re
 import sys
+import time
 from datetime import datetime
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
 except ImportError:
-    print("Error: google-generativeai is not installed.")
-    print("Run: pip install google-generativeai")
-    sys.exit(1)
+    # フォールバック: 旧パッケージを試す
+    try:
+        import google.generativeai as genai_old
+        USE_OLD_PACKAGE = True
+    except ImportError:
+        print("Error: google-genai is not installed.")
+        print("Run: pip install google-genai")
+        sys.exit(1)
+else:
+    USE_OLD_PACKAGE = False
+
+
+def call_gemini_api(prompt: str, api_key: str, max_retries: int = 3) -> str:
+    """Gemini APIを呼び出し、リトライ機能付き"""
+    
+    for attempt in range(max_retries):
+        try:
+            if USE_OLD_PACKAGE:
+                # 旧パッケージを使用
+                genai_old.configure(api_key=api_key)
+                model = genai_old.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(prompt)
+                return response.text
+            else:
+                # 新パッケージを使用
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=prompt,
+                )
+                return response.text
+                
+        except Exception as e:
+            error_str = str(e)
+            print(f"Attempt {attempt + 1}/{max_retries} failed: {error_str}")
+            
+            # レート制限エラーの場合はリトライ
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 60  # 1分、2分、3分と増加
+                    print(f"Rate limit hit. Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
+                    continue
+            
+            # その他のエラー、または最後のリトライ失敗
+            if attempt == max_retries - 1:
+                raise e
+    
+    raise Exception("Max retries exceeded")
 
 
 def main():
@@ -44,17 +92,26 @@ def main():
     with open(script_js_path, 'r', encoding='utf-8') as f:
         original_content = f.read()
 
-    # Gemini API呼び出し
+    # Gemini API呼び出し（リトライ付き）
     print("Calling Gemini API for AI tools update...")
-    genai.configure(api_key=api_key)
-    
-    model = genai.GenerativeModel('gemini-2.0-flash')
     
     try:
-        response = model.generate_content(prompt)
-        ai_response = response.text
+        ai_response = call_gemini_api(prompt, api_key, max_retries=3)
     except Exception as e:
-        print(f"Error calling Gemini API: {e}")
+        error_msg = str(e)
+        print(f"Error calling Gemini API after retries: {error_msg}")
+        
+        # エラーをログに記録して終了（ワークフローは継続させる）
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(f"=== Update attempt: {datetime.now().isoformat()} ===\n")
+            f.write(f"Status: FAILED - API Error\n")
+            f.write(f"Error: {error_msg}\n")
+        
+        # クォータエラーの場合は正常終了（デプロイは続行）
+        if "429" in error_msg or "quota" in error_msg.lower():
+            print("Quota exceeded. Skipping update but continuing deployment.")
+            sys.exit(0)
+        
         sys.exit(1)
 
     # レスポンスからJavaScriptコードを抽出

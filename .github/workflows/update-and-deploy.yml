@@ -24,7 +24,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install google-generativeai
+          pip install google-genai
 
       - name: Generate update prompt
         run: python AIselectUpdate/create_update_prompt.py
