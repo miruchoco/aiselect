@@ -1,0 +1,58 @@
+name: Update AI Tools and Deploy
+
+on:
+  schedule:
+    # 毎日午前9時(JST) = UTC 0時に実行
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # 手動実行も可能
+
+jobs:
+  update-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install google-generativeai
+
+      - name: Generate update prompt
+        run: python AIselectUpdate/create_update_prompt.py
+
+      - name: Run AI auto-update
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python AIselectUpdate/auto_update.py
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git diff --quiet AIselect/script.js || echo "changes=true" >> $GITHUB_OUTPUT
+
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.changes == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add AIselect/script.js
+          git add AIselectUpdate/prompt.txt
+          git add AIselectUpdate/update_log.txt
+          git commit -m "🤖 Auto-update AI tools data - $(date +'%Y-%m-%d')"
+          git push
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy AIselect --project-name=aiselect

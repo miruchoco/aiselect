@@ -1,0 +1,6 @@
+name = "aiselect"
+pages_build_output_dir = "AIselect"
+compatibility_date = "2024-01-01"
+
+[site]
+bucket = "AIselect"
